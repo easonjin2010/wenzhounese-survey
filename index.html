@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>视频观看问卷</title>
+<script src="config.js"></script>
+<style>
+  :root{
+    --bg: #0b0b0c;
+    --ink: #f5f5f3;
+    --ink-dim: #9a9a96;
+    --accent: #e8463a;
+    --card: #161617;
+    --line: rgba(255,255,255,0.12);
+    --radius: 14px;
+  }
+  *{ box-sizing: border-box; }
+  html,body{
+    margin:0; padding:0; height:100%;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #app{ min-height:100vh; display:flex; flex-direction:column; align-items:center; }
+
+  /* ---------- intro / screening ---------- */
+  .screen{
+    width:100%; max-width:480px; min-height:100vh;
+    display:flex; flex-direction:column; justify-content:center;
+    padding: 32px 24px; gap:18px;
+  }
+  .eyebrow{ color:var(--accent); font-size:13px; letter-spacing:0.06em; text-transform:uppercase; font-weight:600; margin:0; }
+  h1{ font-size:28px; line-height:1.25; margin:0 0 4px; font-weight:700; }
+  p.lead{ color:var(--ink-dim); font-size:15px; line-height:1.6; margin:0 0 8px; }
+  .btn{
+    background: var(--accent); color:#fff; border:none; border-radius:999px;
+    padding:14px 22px; font-size:16px; font-weight:600; cursor:pointer;
+    width:100%; margin-top:8px; transition: opacity .15s;
+  }
+  .btn:active{ opacity:0.8; }
+  .btn.secondary{
+    background:transparent; color:var(--ink); border:1px solid var(--line);
+  }
+  .btn:disabled{ opacity:0.35; cursor:not-allowed; }
+
+  .field{ display:flex; flex-direction:column; gap:8px; }
+  .field label{ font-size:14px; color:var(--ink-dim); }
+  .field input[type=number], .field input[type=text], .field textarea{
+    background: var(--card); border:1px solid var(--line); border-radius:10px;
+    color:var(--ink); padding:12px 14px; font-size:16px; width:100%; font-family:inherit;
+  }
+  .field textarea{ min-height:90px; resize:vertical; }
+  .choice-row{ display:flex; flex-direction:column; gap:8px; }
+  .choice-btn{
+    background:var(--card); border:1px solid var(--line); border-radius:10px;
+    color:var(--ink); padding:13px 14px; font-size:15px; text-align:left; cursor:pointer;
+  }
+  .choice-btn.selected{ border-color: var(--accent); background: rgba(232,70,58,0.12); }
+  .scale-row{ display:flex; gap:8px; justify-content:space-between; }
+  .scale-pt{
+    flex:1; aspect-ratio:1; border-radius:10px; border:1px solid var(--line);
+    background:var(--card); color:var(--ink); font-size:15px; font-weight:600; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .scale-pt.selected{ border-color:var(--accent); background:var(--accent); }
+  .scale-labels{ display:flex; justify-content:space-between; font-size:12px; color:var(--ink-dim); margin-top:-6px; }
+  .audio-block{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:18px 16px; display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom:18px;
+  }
+  .audio-play-btn{
+    width:56px; height:56px; border-radius:50%; background:var(--accent); border:none;
+    color:#fff; font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .audio-hint{ font-size:12px; color:var(--ink-dim); }
+  .audio-replay-count{ font-size:12px; color:var(--ink-dim); }
+  .progress-dots{ display:flex; gap:6px; justify-content:center; margin-bottom:4px; }
+  .dot{ width:6px; height:6px; border-radius:50%; background:var(--line); }
+  .dot.active{ background:var(--accent); }
+
+  /* ---------- feed (vertical video scroll) ---------- */
+  #feed-screen{ width:100%; height:100vh; position:relative; background:#000; }
+  .feed-scroller{
+    height:100vh; width:100%; overflow-y:scroll; scroll-snap-type:y mandatory;
+    -webkit-overflow-scrolling:touch;
+  }
+  .feed-item{
+    height:100vh; width:100%; scroll-snap-align:start; position:relative;
+    display:flex; align-items:center; justify-content:center; background:#000; overflow:hidden;
+  }
+  .feed-item .backdrop{
+    position:absolute; inset:0; background-size:cover; background-position:center;
+    filter:blur(30px) brightness(0.45); transform:scale(1.15);
+  }
+  .feed-item video{
+    position:relative; z-index:1;
+    width:100%; height:100%; object-fit:contain;
+  }
+  .feed-meta{
+    position:absolute; left:0; bottom:0; right:72px;
+    padding:14px 14px 32px 14px;
+    background:linear-gradient(transparent, rgba(0,0,0,0.72));
+    display:flex; flex-direction:column; gap:5px; pointer-events:none; z-index:3;
+  }
+  .feed-handle{
+    font-weight:700; font-size:15px; display:flex; align-items:center; gap:6px;
+  }
+  .feed-handle-at{ color:#fff; }
+  .feed-caption{
+    font-size:13px; color:#eee; line-height:1.45; max-height:60px;
+    overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;
+  }
+  .feed-music{
+    font-size:12px; color:#ddd; margin-top:2px;
+    display:flex; align-items:center; gap:5px;
+  }
+  .feed-music-note{ animation:spin 4s linear infinite; display:inline-block; }
+  /* right-side rail: avatar + actions stacked */
+  .feed-rail{
+    position:absolute; right:10px; bottom:80px;
+    display:flex; flex-direction:column; align-items:center; gap:18px; z-index:3;
+  }
+  .feed-avatar{
+    width:44px; height:44px; border-radius:50%; border:2px solid #fff;
+    background:var(--accent); display:flex; align-items:center; justify-content:center;
+    font-size:17px; font-weight:700; color:#fff; overflow:hidden; flex-shrink:0;
+  }
+  .feed-actions{
+    display:flex; flex-direction:column; align-items:center; gap:18px;
+  }
+  .feed-action{
+    display:flex; flex-direction:column; align-items:center; gap:3px;
+  }
+  .feed-action-icon{
+    width:44px; height:44px; border-radius:50%; background:rgba(0,0,0,0.35);
+    display:flex; align-items:center; justify-content:center; font-size:22px;
+    cursor:pointer; transition: transform .1s;
+  }
+  .feed-action-icon:active{ transform:scale(0.88); }
+  .feed-action-icon.liked{ animation: heart-pop .25s ease; }
+  @keyframes heart-pop{
+    0%  { transform:scale(1); }
+    50% { transform:scale(1.35); }
+    100%{ transform:scale(1); }
+  }
+  .feed-action-count{ font-size:12px; font-weight:600; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.7); }
+  .feed-progress{
+    position:absolute; top:10px; left:10px; right:10px; display:flex; gap:4px; z-index:5;
+  }
+  .feed-progress .seg{ flex:1; height:2.5px; border-radius:2px; background:rgba(255,255,255,0.3); }
+  .feed-progress .seg.done{ background:#fff; }
+  .sound-icon{
+    position:absolute; top:14px; right:14px; z-index:5;
+    width:34px; height:34px; border-radius:50%; background:rgba(0,0,0,0.45);
+    display:flex; align-items:center; justify-content:center; font-size:15px; pointer-events:none;
+  }
+  .sound-overlay{
+    position:absolute; inset:0; z-index:20; background:rgba(0,0,0,0.55);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  .sound-overlay.hidden{ display:none; }
+  .sound-overlay-inner{
+    background:rgba(20,20,20,0.9); border:1px solid var(--line); border-radius:16px;
+    padding:24px 28px; display:flex; flex-direction:column; align-items:center; gap:10px;
+    color:#fff; font-size:15px; font-weight:600; text-align:center;
+  }
+  .sound-overlay-icon{ font-size:30px; }
+  .feed-continue{
+    position:absolute; bottom:24px; left:50%; transform:translateX(-50%);
+    background:#fff; color:#000; border:none; border-radius:999px; padding:12px 20px;
+    font-size:14px; font-weight:600; z-index:25; display:none;
+  }
+  .feed-continue.show{ display:block; }
+
+  /* ---------- survey ---------- */
+  .survey-wrap{ width:100%; max-width:520px; padding:28px 24px 60px; }
+  .q-block{ margin-bottom:30px; padding-bottom:26px; border-bottom:1px solid var(--line); }
+  .q-block:last-of-type{ border-bottom:none; }
+  .q-prompt{ font-size:16px; font-weight:600; margin:0 0 14px; line-height:1.5; }
+  .section-title{ font-size:13px; text-transform:uppercase; letter-spacing:0.05em; color:var(--accent); font-weight:700; margin: 8px 0 4px; }
+  .video-pick-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .video-pick-btn{
+    aspect-ratio:9/16; border-radius:8px; border:1px solid var(--line); background:var(--card);
+    color:var(--ink-dim); font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .video-pick-btn.selected{ border-color:var(--accent); color:#fff; background:rgba(232,70,58,0.18); }
+  .done-screen{ text-align:center; padding-top:80px; }
+  .spinner{
+    width:28px; height:28px; border-radius:50%; border:3px solid var(--line); border-top-color:var(--accent);
+    animation:spin 0.8s linear infinite; margin: 0 auto;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .err{ color:#ff8a80; font-size:13px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+(function(){
+
+  // ---------------- state ----------------
+  const state = {
+    participantId: 'p_' + Math.random().toString(36).slice(2,10) + Date.now().toString(36),
+    screen: 'intro',           // intro -> screening -> feedIntro -> feed -> survey -> done
+    screeningAnswers: {},
+    screeningIndex: 0,
+    feedList: [],              // ordered list of {src, isTarget, targetId}
+    feedIndex: 0,
+    targetMeta: null,          // {id, slot}
+    watchedAll: false,
+    likedVideos: new Set(),    // stems of videos the participant liked
+    surveyAnswers: {},
+    surveySection: 0,          // 0 general, 1 target, 2 background
+    surveyQIndex: 0,
+    submitting: false,
+    submitError: null,
+  };
+
+  const app = document.getElementById('app');
+
+  // ---------------- helpers ----------------
+  function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+  function randInt(a,b){ return a + Math.floor(Math.random()*(b-a+1)); }
+  function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+  function buildFeed(){
+    const cfg = CONFIG;
+    const target = pick(cfg.targetVideos);
+    const slot = randInt(cfg.targetPositionRange[0], cfg.targetPositionRange[1]);
+    const fillersNeeded = Math.max(cfg.feedSize - 1, 1);
+    // sample fillers without repeats if possible
+    let fillers = [...cfg.fillerVideos];
+    for(let i=fillers.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      [fillers[i],fillers[j]] = [fillers[j],fillers[i]];
+    }
+    while(fillers.length < fillersNeeded){
+      fillers = fillers.concat(cfg.fillerVideos);
+    }
+    fillers = fillers.slice(0, fillersNeeded);
+
+    const list = fillers.map(f => ({ src: f, isTarget:false }));
+    const insertAt = Math.min(slot-1, list.length);
+    list.splice(insertAt, 0, { src: target.file, isTarget:true, targetId: target.id });
+
+    state.feedList = list;
+    state.targetMeta = { id: target.id, slot: insertAt+1 };
+  }
+
+  async function saveResponse(){
+    const payload = {
+      participantId: state.participantId,
+      submittedAt: new Date().toISOString(),
+      targetVideoId: state.targetMeta.id,
+      targetSlot: state.targetMeta.slot,
+      feedSize: state.feedList.length,
+      likedVideos: Array.from(state.likedVideos),   // e.g. ["filler1", "target_a"]
+      likedTarget: state.likedVideos.has(state.targetMeta.id), // convenience bool
+      screening: state.screeningAnswers,
+      survey: state.surveyAnswers,
+    };
+    try{
+      const res = await window.storage.set('response:' + state.participantId, JSON.stringify(payload), true);
+      if(!res) throw new Error('storage returned null');
+      return true;
+    }catch(e){
+      console.error('save failed', e);
+      return false;
+    }
+  }
+
+  // ---------------- render ----------------
+  function render(){
+    if(state.screen === 'intro') return renderIntro();
+    if(state.screen === 'screening') return renderScreening();
+    if(state.screen === 'feedIntro') return renderFeedIntro();
+    if(state.screen === 'feed') return renderFeed();
+    if(state.screen === 'survey') return renderSurvey();
+    if(state.screen === 'done') return renderDone();
+  }
+
+  function screenWrap(innerHtml){
+    app.innerHTML = `<div class="screen">${innerHtml}</div>`;
+  }
+
+  function renderIntro(){
+    screenWrap(`
+      <p class="eyebrow">研究问卷</p>
+      <h1>观看几个短视频，然后回答几个问题</h1>
+      <p class="lead">您将观看一组短视频，类似于刷视频动态。观看完毕后，我们会请您回答一些相关问题。整个过程大约需要 5–8 分钟，您的回答将完全匿名。</p>
+      <button class="btn" id="start-btn">开始</button>
+    `);
+    document.getElementById('start-btn').onclick = () => {
+      state.screen = 'screening';
+      render();
+    };
+  }
+
+  // ---- shared question renderer ----
+  // Builds the input HTML and wires up interaction for ANY question type.
+  // Used by both renderScreening() and renderSurvey() so every type works everywhere.
+  function buildQuestionInput(q){
+    if(q.type === 'number'){
+      return `<div class="field"><input type="number" id="q-input" placeholder="请输入数字" /></div>`;
+    } else if(q.type === 'text'){
+      return `<div class="field"><textarea id="q-input" placeholder="请在此输入您的回答…"></textarea></div>`;
+    } else if(q.type === 'scale'){
+      return `
+        <div class="scale-row">${Array.from({length:q.max-q.min+1},(_,i)=>q.min+i).map(v=>
+          `<button class="scale-pt" data-val="${v}">${v}</button>`).join('')}</div>
+        <div class="scale-labels"><span>${q.minLabel}</span><span>${q.maxLabel}</span></div>
+      `;
+    } else if(q.type === 'single-choice' || q.type === 'multiple-choice'){
+      return `<div class="choice-row">${q.options.map(opt=>
+        `<button class="choice-btn" data-val="${escAttr(opt)}">${opt}</button>`).join('')}</div>`;
+    } else if(q.type === 'video-picker'){
+      return `<div class="video-pick-grid">${state.feedList.map((item,i)=>
+        `<button class="video-pick-btn" data-val="${i}">视频 ${i+1}</button>`).join('')}</div>`;
+    } else if(q.type === 'audio-multiple-choice'){
+      return `
+        <div class="audio-block">
+          <button class="audio-play-btn" id="audio-play-btn" type="button">&#9658;</button>
+          <span class="audio-hint" id="audio-hint">点击播放</span>
+          <audio id="q-audio" src="${escAttr(q.audioSrc)}" preload="auto"></audio>
+        </div>
+        <div class="choice-row">${q.options.map(opt=>
+          `<button class="choice-btn" data-val="${escAttr(opt)}">${opt}</button>`).join('')}</div>
+      `;
+    }
+    return `<p style="color:var(--accent)">Unknown question type: "${q.type}"</p>`;
+  }
+
+  // Returns true if Continue should start enabled (text/number are always enabled since
+  // they're optional or validate on submit; everything else requires a tap first).
+  function startEnabled(q){
+    return q.type === 'text' || q.type === 'number';
+  }
+
+  // Wire up interactions after the question HTML is in the DOM.
+  // Returns a getter function: call getValue() to get the current answer (or null if unanswered).
+  function wireQuestionInput(q){
+    let selected = null;
+
+    if(q.type === 'audio-multiple-choice'){
+      const audio   = document.getElementById('q-audio');
+      const playBtn = document.getElementById('audio-play-btn');
+      const hint    = document.getElementById('audio-hint');
+      let playCount = 0;
+      playBtn.onclick = () => { audio.currentTime = 0; audio.play().catch(()=>{}); };
+      audio.onplay   = () => { playBtn.innerHTML = '&#9632;'; };
+      audio.onended  = () => {
+        playBtn.innerHTML = '&#9658;';
+        playCount++;
+        hint.textContent = `已播放 ${playCount} 次 — 点击重播`;
+      };
+    }
+
+    if(q.type === 'number'){
+      const inp = document.getElementById('q-input');
+      inp.oninput = () => {
+        document.getElementById('next-btn').disabled = inp.value.trim() === '';
+      };
+    } else if(q.type === 'text'){
+      // always enabled, no wiring needed
+    } else {
+      // all button-choice types
+      document.querySelectorAll('.scale-pt, .video-pick-btn, .choice-btn').forEach(btn=>{
+        btn.onclick = () => {
+          document.querySelectorAll('.scale-pt, .video-pick-btn, .choice-btn').forEach(b=>b.classList.remove('selected'));
+          btn.classList.add('selected');
+          selected = btn.dataset.val;
+          document.getElementById('next-btn').disabled = false;
+        };
+      });
+    }
+
+    return function getValue(){
+      if(q.type === 'text')   return document.getElementById('q-input').value.trim();
+      if(q.type === 'number') return document.getElementById('q-input').value.trim();
+      return selected;
+    };
+  }
+
+  function renderScreening(){
+    const qs = CONFIG.screeningQuestions;
+    const q  = qs[state.screeningIndex];
+    const dots = qs.map((_,i)=>`<div class="dot ${i<=state.screeningIndex?'active':''}"></div>`).join('');
+
+    screenWrap(`
+      <div class="progress-dots">${dots}</div>
+      <h1 style="font-size:22px;">${q.prompt}</h1>
+      ${buildQuestionInput(q)}
+      <div class="err" id="err-msg"></div>
+      <button class="btn" id="next-btn" ${startEnabled(q)?'':'disabled'}>继续</button>
+    `);
+
+    const getValue = wireQuestionInput(q);
+
+    document.getElementById('next-btn').onclick = () => {
+      const val = getValue();
+      if(val === null || val === ''){
+        document.getElementById('err-msg').textContent = '请回答此问题。';
+        return;
+      }
+      state.screeningAnswers[q.id] = val;
+      if(state.screeningIndex < qs.length - 1){
+        state.screeningIndex++;
+      } else {
+        buildFeed();
+        state.screen = 'feedIntro';
+      }
+      render();
+    };
+  }
+
+  function renderFeedIntro(){
+    screenWrap(`
+      <p class="eyebrow">即将开始</p>
+      <h1>滑动浏览视频动态</h1>
+      <p class="lead">向上滑动或滚动即可切换到下一个视频，就像正常刷短视频一样。滑过最后一个视频后，您将进入问卷部分。</p>
+      <button class="btn" id="go-feed-btn">开始观看</button>
+    `);
+    document.getElementById('go-feed-btn').onclick = () => {
+      state.screen = 'feed';
+      render();
+    };
+  }
+
+  // Video metadata keyed by filename (without path or extension).
+  // Sourced from wenzhounese_video_log__1_.xlsx — place that file next to index.html.
+  const VIDEO_META = {
+    'target_a':  { handle:'tangtang9708',        caption:'多杯，免费啦 #温州阿唐 #温州 #多比 #哈利波特 #多比配音',                                                                                   likes:13837,   comments:986,    shares:25342   },
+    'target_b':  { handle:'温州珠宝定制大只雯',     caption:'温州话十级教学！日常高频句，学会就能说#温州话 #温州方言 #温州本地 #方言教学 #温州生活',                                                       likes:3095,    comments:274,    shares:1255    },
+    'target_c':  { handle:'1991123145A0G',        caption:'#温州话脱口秀 教科书级别的《地道温州话应用》，学会这三句温州话可以毕业了。#猛果喜剧 #温州话 #猛果龙剑 #脱口秀互动',                          likes:29101,   comments:1771,   shares:33535   },
+    'target_d':  { handle:'JiuY_22',              caption:'温州话版方言教学#温州话 #温州话散讲 #温州话教学 #温州话方言',                                                                                likes:4511,    comments:433,    shares:1529    },
+    'target_e':  { handle:'1991123145A0G',        caption:'成为合格的温州女婿，除了用AI暗推温州话，也可以关掉转向灯#猛果喜剧 #猛果 #温州话脱口秀 #脱口秀互动',                                          likes:1566,    comments:52,     shares:1746    },
+    'target_f':  { handle:'温州珠宝定制大只雯',     caption:'温州珠宝老板娘教你温州话常用语，听懂的都是本地人～#温州话 #温州话教学 #温州本地人 #温州同城 #温州珠宝店',                                    likes:2692,    comments:310,    shares:589     },
+    'target_g':  { handle:'陈思建',               caption:'温州话版 一定要看完学会！ #不灭的帅哥行为指南',                                                                                              likes:840599,  comments:69499,  shares:9695    },
+    'target_h':  { handle:'tangtang9708',         caption:'就说我这个花狗蛋演的好不好吧！ #温州  #我在浙江过大年',                                                                                      likes:230217,  comments:22866,  shares:31308   },
+    'target_j':  { handle:'71294863021',          caption:'又抽象了鱼 #温州 #温州话 #小鱼跑跑',                                                                                                       likes:197295,  comments:5344,   shares:37721   },
+    'target_k':  { handle:'xiaoyingyule',         caption:'#温州话究竟有多难懂，嗯，掌握一门外语确实很重要',                                                                                           likes:107680,  comments:9110,   shares:12123   },
+    'target_l':  { handle:'小婷',                 caption:'寝室方言大挑战——温州版2.0版本#寝室合拍 #校园生活 #浙江方言',                                                                               likes:76663,   comments:16842,  shares:86068   },
+    'target_m':  { handle:'20890010096',          caption:'哈哈哈哈哈 老薛讲温州话笑死我了#薛之谦温州 @薛之谦',                                                                                        likes:98554,   comments:10939,  shares:65331   },
+    'target_n':  { handle:'69719352269',          caption:'温州话 vs 日语，你觉得几分像？ #创作灵感 #教学 #温州话 #浙江dou知道 #内容过于真实',                                                         likes:64357,   comments:7754,   shares:104555  },
+    'target_o':  { handle:'古典小勇',              caption:'说着玩的才没有针对谁哦',                                                                                                                   likes:70189,   comments:8544,   shares:118646  },
+    'target_p':  { handle:'barbinili',            caption:'我妈跟我说话我都要愣三分钟',                                                                                                               likes:192316,  comments:15392,  shares:21482   },
+    'target_q':  { handle:'37330435140',          caption:'#撒西不理哒呐 #方言 #温州话 《不敢带你回温州》',                                                                                           likes:54662,   comments:6175,   shares:54346   },
+    'target_r':  { handle:'pbq1211',              caption:'温州人的口头禅 是不是一听就很亲切#养老院 #温州话',                                                                                          likes:60690,   comments:4569,   shares:71043   },
+    'target_s':  { handle:'WUKONGCUO88',          caption:'家人们 听我这口音 你觉得我是温州哪里的？#vlog日常 #内容过于真实#温州话 @DOU+小助手',                                                       likes:63930,   comments:10272,  shares:4494    },
+    'target_t':  { handle:'tangtang9708',         caption:'出了温州，真的就没有了 #温州',                                                                                                              likes:107311,  comments:18647,  shares:24775   },
+    'target_u':  { handle:'54950080303',          caption:'听说讲温州话会变身？  #浙江方言 #温州方言 #日常 #变身',                                                                                    likes:36166,   comments:7205,   shares:44478   },
+    'target_v':  { handle:'xubingsong0577',       caption:'多管闲事的结果 #温州话配音 #温州话 #温州方言 #炳松配音 #温州',                                                                             likes:6896,    comments:535,    shares:10160   },
+    'target_w':  { handle:'82524043801',          caption:'日本人去温州#日本人#温州 #温州话',                                                                                                          likes:108556,  comments:7791,   shares:54484   },
+    'target_x':  { handle:'W1586962H5088Z',       caption:'#温州方言 大集合 你能听懂几个地方的方言',                                                                                                  likes:38132,   comments:25395,  shares:56587   },
+    'target_y':  { handle:'娄艺潇',               caption:'温州话有点难学，但是美食真的好好吃呀！ #寻找中国最美城市 #遇见城市 #心动打卡指南',                                                          likes:28742,   comments:2748,   shares:11546   },
+    'target_z':  { handle:'tangtang9708',         caption:'想想觉得挺可惜的……#温州 #温州阿唐',                                                                                                       likes:23112,   comments:2800,   shares:3338    },
+    'target_aa': { handle:'LY6666520',            caption:'#温州话 #温州永嘉  大家伙的这几天可以开始吵架了，到13号再吵就太明显了@DOU+小助手 @抖音小助手',                                              likes:596517,  comments:23742,  shares:17997   },
+    'filler1':   { handle:'Xmtd001',              caption:'《关于同事互助这件事》 #内容过于真实 #办公室 #一定要看到最后',                                                                              likes:5897890, comments:119303, shares:5823976 },
+    'filler2':   { handle:'lijiaoling',           caption:'告别是经常的，步履是放达的。谨以这条视频献给我深爱的湖南大学。#湖南大学 #毕业季 #毕业',                                                    likes:1559877, comments:17311,  shares:224060  },
+    'filler3':   { handle:'33405186415',          caption:'第一集：师父该入万魂幡了 #原创动画 #二次元 #ai #ai动画',                                                                                   likes:218869,  comments:2113,   shares:13240   },
+    'filler4':   { handle:'海棠HaiTang',           caption:'介绍一下我跟海棠 #万物可爱计划',                                                                                                          likes:1417639, comments:25877,  shares:229096  },
+    'filler5':   { handle:'PolyJiali',            caption:'双层巴士的第一排，晒到蜕皮的震撼 #巴塔哥尼亚 #菲兹罗伊 #patagonia #去想去的地方',                                                         likes:106290,  comments:914,    shares:26867   },
+  };
+  function fmtN(n){
+    if(n >= 1000000) return (n/1000000).toFixed(1).replace(/\.0$/,'') + 'M';
+    if(n >= 10000)   return (n/10000).toFixed(1).replace(/\.0$/,'') + 'w';
+    if(n >= 1000)    return (n/1000).toFixed(1).replace(/\.0$/,'') + 'K';
+    return String(n);
+  }
+  function metaFor(src){
+    // src is like "videos/filler1.mp4" — extract the stem
+    const stem = src.split('/').pop().replace(/\.[^.]+$/, '');
+    return VIDEO_META[stem] || { handle: stem, caption: '', likes:0, comments:0, shares:0 };
+  }
+
+  function renderFeed(){
+    const list = state.feedList;
+    app.innerHTML = `
+      <div id="feed-screen">
+        <div class="feed-progress">
+          ${list.map((_,i)=>`<div class="seg" data-i="${i}"></div>`).join('')}
+        </div>
+        <div class="feed-scroller" id="scroller">
+          ${list.map((item,i)=>{
+            const m = metaFor(item.src);
+            const initial = (m.handle.replace(/[^a-zA-Z\u4e00-\u9fff]/g,'')||'?')[0].toUpperCase();
+            return `
+            <div class="feed-item" data-i="${i}">
+              <div class="backdrop" id="backdrop-${i}"></div>
+              <video src="${item.src}" playsinline ${i===0?'autoplay':''} muted loop></video>
+
+              <div class="feed-rail">
+                <div class="feed-avatar">${initial}</div>
+                <div class="feed-actions">
+                  <div class="feed-action">
+                    <div class="feed-action-icon" id="like-btn-${i}" data-stem="${item.src.split('/').pop().replace(/\.[^.]+$/,'')}">&#10084;</div>
+                    <div class="feed-action-count" id="like-count-${i}">${fmtN(m.likes)}</div>
+                  </div>
+                  <div class="feed-action" style="pointer-events:none">
+                    <div class="feed-action-icon">&#128172;</div>
+                    <div class="feed-action-count">${fmtN(m.comments)}</div>
+                  </div>
+                  <div class="feed-action" style="pointer-events:none">
+                    <div class="feed-action-icon">&#10148;</div>
+                    <div class="feed-action-count">${fmtN(m.shares)}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="feed-meta">
+                <div class="feed-handle">
+                  <span class="feed-handle-at">@${m.handle}</span>
+                </div>
+                <div class="feed-caption">${m.caption}</div>
+                <div class="feed-music">
+                  <span class="feed-music-note">&#9835;</span>
+                  原声 - ${m.handle}
+                </div>
+              </div>
+
+              <div class="sound-icon" id="sound-icon-${i}">&#128263;</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="sound-overlay" id="sound-overlay">
+          <div class="sound-overlay-inner">
+            <div class="sound-overlay-icon">&#128266;</div>
+            <div>点击任意位置开启声音</div>
+          </div>
+        </div>
+        <button class="feed-continue" id="continue-btn">进入问卷 ›</button>
+      </div>
+    `;
+
+    const scroller = document.getElementById('scroller');
+    const items = Array.from(document.querySelectorAll('.feed-item'));
+    const segs = Array.from(document.querySelectorAll('.seg'));
+    const soundOverlay = document.getElementById('sound-overlay');
+    const watched = new Set();
+    let soundEnabled = false;
+    let currentIndex = 0;
+
+    function markDone(i){
+      watched.add(i);
+      if(segs[i]) segs[i].classList.add('done');
+    }
+
+    function updateSoundIcons(){
+      items.forEach((it,i)=>{
+        const icon = document.getElementById('sound-icon-' + i);
+        if(!icon) return;
+        icon.innerHTML = soundEnabled ? '&#128266;' : '&#128263;';
+      });
+    }
+
+    // Enable sound globally on first tap anywhere in the feed (browsers block
+    // autoplay-with-sound, so we unmute in direct response to a user gesture).
+    function enableSound(){
+      if(soundEnabled) return;
+      soundEnabled = true;
+      items.forEach(it=>{ it.querySelector('video').muted = false; });
+      soundOverlay.classList.add('hidden');
+      updateSoundIcons();
+    }
+    soundOverlay.addEventListener('click', enableSound);
+
+    // play/pause based on visibility, track watch progress, track current index
+    const observer = new IntersectionObserver((entries)=>{
+      entries.forEach(entry=>{
+        const vid = entry.target.querySelector('video');
+        const idx = Number(entry.target.dataset.i);
+        if(entry.isIntersecting && entry.intersectionRatio > 0.6){
+          vid.muted = !soundEnabled;
+          vid.play().catch(()=>{});
+          currentIndex = idx;
+          if(idx === list.length - 1){
+            document.getElementById('continue-btn').classList.add('show');
+          }
+        } else {
+          vid.pause();
+        }
+      });
+    }, { threshold:[0,0.6,1] });
+    items.forEach(it=>observer.observe(it));
+
+    // Capture a blurred backdrop frame from each video once it has data,
+    // so vertical/non-fullscreen videos don't leave bare black bars.
+    items.forEach((it,i)=>{
+      const vid = it.querySelector('video');
+      const backdrop = document.getElementById('backdrop-' + i);
+      vid.addEventListener('loadeddata', function grabFrame(){
+        try{
+          const canvas = document.createElement('canvas');
+          canvas.width = 80;
+          canvas.height = 80;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+          backdrop.style.backgroundImage = `url(${canvas.toDataURL('image/jpeg', 0.5)})`;
+        }catch(e){ /* canvas may fail on cross-origin sources; backdrop just stays black */ }
+      }, { once:true });
+    });
+
+    // mark a video watched once it reaches ~70% playthrough or ends
+    items.forEach((it,i)=>{
+      const vid = it.querySelector('video');
+      vid.addEventListener('timeupdate', ()=>{
+        if(vid.duration && vid.currentTime / vid.duration > 0.7) markDone(i);
+      });
+      vid.addEventListener('ended', ()=> markDone(i));
+      it.addEventListener('click', (e)=>{
+        if(!soundEnabled){ enableSound(); return; }
+        vid.muted = !vid.muted;
+        soundEnabled = !vid.muted ? true : soundEnabled;
+        document.getElementById('sound-icon-' + i).innerHTML = vid.muted ? '&#128263;' : '&#128266;';
+      });
+    });
+
+    // Like button — toggle liked state, update color + count, save to state.likedVideos
+    items.forEach((it, i) => {
+      const likeBtn   = document.getElementById('like-btn-' + i);
+      const likeCount = document.getElementById('like-count-' + i);
+      if(!likeBtn) return;
+      const stem = likeBtn.dataset.stem;
+      const baseLikes = metaFor(list[i].src).likes;
+
+      likeBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); // don't let click bubble up to the mute handler
+        const isLiked = state.likedVideos.has(stem);
+        if(isLiked){
+          state.likedVideos.delete(stem);
+          likeBtn.style.color = '';
+          likeBtn.classList.remove('liked');
+          likeCount.textContent = fmtN(baseLikes);
+        } else {
+          state.likedVideos.add(stem);
+          likeBtn.style.color = '#ff3b5c';
+          likeBtn.classList.remove('liked'); // reset first so re-tap re-triggers animation
+          void likeBtn.offsetWidth;          // force reflow
+          likeBtn.classList.add('liked');
+          likeCount.textContent = fmtN(baseLikes + 1);
+        }
+      });
+    });
+
+    // Scrolling/swiping past the final video goes straight to the survey —
+    // no need to tap a continue button.
+    let touchStartY = null;
+    let advanced = false;
+    function goToSurvey(){
+      if(advanced) return;
+      advanced = true;
+      state.screen = 'survey';
+      state.surveySection = 0;
+      state.surveyQIndex = 0;
+      render();
+    }
+    scroller.addEventListener('wheel', (e)=>{
+      const atLast = currentIndex === list.length - 1;
+      if(atLast && e.deltaY > 0){ goToSurvey(); }
+    }, { passive:true });
+    scroller.addEventListener('touchstart', (e)=>{
+      touchStartY = e.touches[0].clientY;
+    }, { passive:true });
+    scroller.addEventListener('touchend', (e)=>{
+      const atLast = currentIndex === list.length - 1;
+      if(atLast && touchStartY !== null){
+        const dy = touchStartY - e.changedTouches[0].clientY;
+        if(dy > 40){ goToSurvey(); } // swiped up past the last video
+      }
+    }, { passive:true });
+
+    document.getElementById('continue-btn').onclick = goToSurvey;
+  }
+
+  // ---- survey ----
+  function surveySections(){
+    const targetId = state.targetMeta.id;
+    const audioQs = (CONFIG.targetAudioQuestions && CONFIG.targetAudioQuestions[targetId]) || [];
+    return [
+      { key:'general', title:'关于这组视频', questions: CONFIG.generalQuestions },
+      { key:'target', title:'关于其中一个视频', questions: [...CONFIG.targetQuestions, ...audioQs] },
+      { key:'background', title:'关于您自己', questions: CONFIG.backgroundQuestions },
+    ];
+  }
+
+  function renderSurvey(){
+    const sections = surveySections();
+    const sec = sections[state.surveySection];
+    const q = sec.questions[state.surveyQIndex];
+    const isFirstOfSection = state.surveyQIndex === 0;
+
+    let inputHtml = buildQuestionInput(q);
+
+    screenWrap(`
+      ${isFirstOfSection ? `<p class="section-title">${sec.title}</p>` : ''}
+      <h1 style="font-size:21px;">${q.prompt}</h1>
+      ${inputHtml}
+      <div class="err" id="err-msg"></div>
+      <button class="btn" id="next-btn" ${startEnabled(q)?'':'disabled'}>继续</button>
+    `);
+
+    const getValue = wireQuestionInput(q);
+
+    document.getElementById('next-btn').onclick = async () => {
+      const val = getValue();
+      if(val === null || val === ''){
+        // text is optional, everything else requires an answer
+        if(q.type !== 'text'){
+          document.getElementById('err-msg').textContent = '请回答此问题。';
+          return;
+        }
+      }
+      if(q.type === 'audio-multiple-choice' && q.correctAnswer){
+        state.surveyAnswers[q.id] = { answer: val, correct: val === q.correctAnswer };
+      } else {
+        state.surveyAnswers[q.id] = val ?? '';
+      }
+
+      // advance within section
+      if(state.surveyQIndex < sec.questions.length - 1){
+        state.surveyQIndex++;
+        render();
+        return;
+      }
+      // advance to next section
+      if(state.surveySection < sections.length - 1){
+        state.surveySection++;
+        state.surveyQIndex = 0;
+        render();
+        return;
+      }
+      // finished — submit
+      state.screen = 'done';
+      state.submitting = true;
+      render();
+      const ok = await saveResponse();
+      state.submitting = false;
+      state.submitError = ok ? null : 'There was a problem saving your response. Please screenshot this screen and let the researcher know.';
+      render();
+    };
+  }
+
+  function renderDone(){
+    if(state.submitting){
+      screenWrap(`
+        <div class="done-screen">
+          <div class="spinner"></div>
+          <p class="lead" style="margin-top:20px;">正在保存您的回答…</p>
+        </div>
+      `);
+      return;
+    }
+    screenWrap(`
+      <div class="done-screen">
+        <h1>感谢您的参与</h1>
+        <p class="lead">您的回答已成功提交，现在可以关闭此页面。</p>
+        ${state.submitError ? `<p class="err">提交时出现问题，请截图并告知研究人员。</p>` : ''}
+      </div>
+    `);
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
