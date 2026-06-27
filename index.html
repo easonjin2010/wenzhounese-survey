@@ -33,10 +33,11 @@
   .eyebrow{ color:var(--accent); font-size:13px; letter-spacing:0.06em; text-transform:uppercase; font-weight:600; margin:0; }
   h1{ font-size:28px; line-height:1.25; margin:0 0 4px; font-weight:700; }
   p.lead{ color:var(--ink-dim); font-size:15px; line-height:1.6; margin:0 0 8px; }
-  .btn{
+  .btn, a.btn{
     background: var(--accent); color:#fff; border:none; border-radius:999px;
     padding:14px 22px; font-size:16px; font-weight:600; cursor:pointer;
     width:100%; margin-top:8px; transition: opacity .15s;
+    display:block; text-align:center; text-decoration:none; box-sizing:border-box;
   }
   .btn:active{ opacity:0.8; }
   .btn.secondary{
@@ -212,10 +213,10 @@
     watchedAll: false,
     likedVideos: new Set(),    // stems of videos the participant liked
     surveyAnswers: {},
-    surveySection: 0,          // 0 general, 1 target, 2 background
+    surveySection: 0,
     surveyQIndex: 0,
-    submitting: false,
-    submitError: null,
+    downloadUrl: null,
+    downloadFilename: null,
   };
 
   const app = document.getElementById('app');
@@ -249,26 +250,28 @@
     state.targetMeta = { id: target.id, slot: insertAt+1 };
   }
 
-  async function saveResponse(){
+  function saveResponse(){
     const payload = {
       participantId: state.participantId,
       submittedAt: new Date().toISOString(),
       targetVideoId: state.targetMeta.id,
       targetSlot: state.targetMeta.slot,
       feedSize: state.feedList.length,
-      likedVideos: Array.from(state.likedVideos),   // e.g. ["filler1", "target_a"]
-      likedTarget: state.likedVideos.has(state.targetMeta.id), // convenience bool
+      likedVideos: Array.from(state.likedVideos),
+      likedTarget: state.likedVideos.has(state.targetMeta.id),
       screening: state.screeningAnswers,
       survey: state.surveyAnswers,
     };
-    try{
-      const res = await window.storage.set('response:' + state.participantId, JSON.stringify(payload), true);
-      if(!res) throw new Error('storage returned null');
-      return true;
-    }catch(e){
-      console.error('save failed', e);
-      return false;
-    }
+
+    const json     = JSON.stringify(payload, null, 2);
+    const blob     = new Blob([json], { type: 'application/json' });
+    const url      = URL.createObjectURL(blob);
+    const filename = `response_${state.participantId}.json`;
+
+    // store on state so the done screen can re-trigger the download
+    state.downloadUrl      = url;
+    state.downloadFilename = filename;
+    return { url, filename };
   }
 
   // ---------------- render ----------------
@@ -703,7 +706,7 @@
 
     const getValue = wireQuestionInput(q);
 
-    document.getElementById('next-btn').onclick = async () => {
+    document.getElementById('next-btn').onclick = () => {
       const val = getValue();
       if(val === null || val === ''){
         // text is optional, everything else requires an answer
@@ -731,32 +734,25 @@
         render();
         return;
       }
-      // finished — submit
+      // finished — save and show done screen
       state.screen = 'done';
-      state.submitting = true;
-      render();
-      const ok = await saveResponse();
-      state.submitting = false;
-      state.submitError = ok ? null : 'There was a problem saving your response. Please screenshot this screen and let the researcher know.';
+      saveResponse();
       render();
     };
   }
 
   function renderDone(){
-    if(state.submitting){
-      screenWrap(`
-        <div class="done-screen">
-          <div class="spinner"></div>
-          <p class="lead" style="margin-top:20px;">正在保存您的回答…</p>
-        </div>
-      `);
-      return;
-    }
     screenWrap(`
       <div class="done-screen">
-        <h1>感谢您的参与</h1>
-        <p class="lead">您的回答已成功提交，现在可以关闭此页面。</p>
-        ${state.submitError ? `<p class="err">提交时出现问题，请截图并告知研究人员。</p>` : ''}
+        <h1>感谢您的参与！</h1>
+        <p class="lead">您的回答已生成为一个文件。请点击下方按钮下载，然后将文件通过微信或邮件发送给研究人员。</p>
+        <a class="btn" id="download-btn" href="${state.downloadUrl}" download="${state.downloadFilename}">
+          ⬇ 下载我的回答
+        </a>
+        <p class="lead" style="margin-top:24px; font-size:13px; color:var(--ink-dim);">
+          文件名：${state.downloadFilename}<br>
+          下载后请不要修改文件内容，直接发送给研究人员即可。
+        </p>
       </div>
     `);
   }
