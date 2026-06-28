@@ -472,10 +472,20 @@
     if(n >= 1000)    return (n/1000).toFixed(1).replace(/\.0$/,'') + 'K';
     return String(n);
   }
+  // Build a normalized lookup so filenames like "Target A.mp4", "target-a.mp4",
+  // "TargetA.mp4" all resolve to the right metadata entry.
+  const _META_INDEX = {};
+  Object.keys(VIDEO_META).forEach(k => {
+    _META_INDEX[k.toLowerCase().replace(/[\s\-]+/g, '_')] = VIDEO_META[k];
+  });
+
   function metaFor(src){
-    // src is like "videos/filler1.mp4" — extract the stem
-    const stem = src.split('/').pop().replace(/\.[^.]+$/, '');
-    return VIDEO_META[stem] || { handle: stem, caption: '', likes:0, comments:0, shares:0 };
+    const stem = src.split('/').pop().replace(/\.[^.]+$/, '')
+                    .toLowerCase().replace(/[\s\-]+/g, '_');
+    if(!_META_INDEX[stem]){
+      console.warn(`[metaFor] no metadata for stem: "${stem}" (src: "${src}")`);
+    }
+    return _META_INDEX[stem] || { handle: stem, caption: '', likes:0, comments:0, shares:0 };
   }
 
   function renderFeed(){
@@ -498,7 +508,7 @@
                 <div class="feed-avatar">${initial}</div>
                 <div class="feed-actions">
                   <div class="feed-action">
-                    <div class="feed-action-icon" id="like-btn-${i}" data-stem="${item.src.split('/').pop().replace(/\.[^.]+$/,'')}">&#10084;</div>
+                    <div class="feed-action-icon" id="like-btn-${i}" data-stem="${item.src.split('/').pop().replace(/\.[^.]+$/,'').toLowerCase().replace(/[\s\-]+/g,'_')}">&#10084;</div>
                     <div class="feed-action-count" id="like-count-${i}">${fmtN(m.likes)}</div>
                   </div>
                   <div class="feed-action" style="pointer-events:none">
