@@ -156,6 +156,63 @@
     width:34px; height:34px; border-radius:50%; background:rgba(0,0,0,0.45);
     display:flex; align-items:center; justify-content:center; font-size:15px; pointer-events:none;
   }
+  /* comments drawer — slides up from bottom */
+  .comments-drawer{
+    position:absolute; left:0; right:0; bottom:0; z-index:10;
+    background:rgba(22,22,23,0.97); border-radius:16px 16px 0 0;
+    padding:16px 16px 32px; max-height:55vh; overflow-y:auto;
+    transform:translateY(100%); transition:transform .28s ease;
+  }
+  .comments-drawer.open{ transform:translateY(0); }
+  .comments-drawer-handle{
+    width:36px; height:4px; border-radius:2px; background:rgba(255,255,255,0.25);
+    margin:0 auto 14px;
+  }
+  .comments-drawer-title{
+    font-size:15px; font-weight:700; margin-bottom:14px; color:var(--ink);
+  }
+  .comment-row{
+    display:flex; gap:10px; margin-bottom:14px; align-items:flex-start;
+  }
+  .comment-avatar{
+    width:32px; height:32px; border-radius:50%; background:var(--accent);
+    display:flex; align-items:center; justify-content:center;
+    font-size:13px; font-weight:700; flex-shrink:0;
+  }
+  .comment-body{ flex:1; }
+  .comment-handle{ font-size:12px; color:var(--ink-dim); margin-bottom:2px; }
+  .comment-text{ font-size:14px; line-height:1.5; color:var(--ink); }
+  /* volume slider */
+  .volume-bar{
+    position:absolute; left:14px; bottom:140px; z-index:6;
+    display:flex; flex-direction:column; align-items:center; gap:6px;
+  }
+  .volume-icon{ font-size:16px; }
+  .volume-slider{
+    -webkit-appearance:none; appearance:none;
+    writing-mode:vertical-lr; direction:rtl;
+    width:4px; height:80px; border-radius:2px;
+    background:rgba(255,255,255,0.3); outline:none; cursor:pointer;
+  }
+  .volume-slider::-webkit-slider-thumb{
+    -webkit-appearance:none; width:14px; height:14px;
+    border-radius:50%; background:#fff; cursor:pointer;
+  }
+  /* back button */
+  .feed-back-btn{
+    position:absolute; top:20px; left:14px; z-index:6;
+    width:34px; height:34px; border-radius:50%; background:rgba(0,0,0,0.45);
+    border:none; color:#fff; font-size:16px; display:flex; align-items:center;
+    justify-content:center; cursor:pointer; display:none;
+  }
+  .feed-back-btn.show{ display:flex; }
+  .share-toast{
+    position:fixed; bottom:80px; left:50%; transform:translateX(-50%);
+    background:rgba(30,30,30,0.95); color:#fff; padding:10px 18px;
+    border-radius:999px; font-size:13px; font-weight:600; z-index:30;
+    opacity:0; transition:opacity .2s; pointer-events:none; white-space:nowrap;
+  }
+  .share-toast.show{ opacity:1; }
   .sound-overlay{
     position:absolute; inset:0; z-index:20; background:rgba(0,0,0,0.55);
     display:flex; align-items:center; justify-content:center; cursor:pointer;
@@ -228,26 +285,42 @@
 
   function buildFeed(){
     const cfg = CONFIG;
-    const target = pick(cfg.targetVideos);
-    const slot = randInt(cfg.targetPositionRange[0], cfg.targetPositionRange[1]);
-    const fillersNeeded = Math.max(cfg.feedSize - 1, 1);
-    // sample fillers without repeats if possible
-    let fillers = [...cfg.fillerVideos];
-    for(let i=fillers.length-1;i>0;i--){
-      const j = Math.floor(Math.random()*(i+1));
-      [fillers[i],fillers[j]] = [fillers[j],fillers[i]];
-    }
-    while(fillers.length < fillersNeeded){
-      fillers = fillers.concat(cfg.fillerVideos);
-    }
-    fillers = fillers.slice(0, fillersNeeded);
+    const targetCount = Math.max(1, cfg.targetVideoCount || 1);
+    const size        = Math.max(targetCount, cfg.feedSize || 5);
 
-    const list = fillers.map(f => ({ src: f, isTarget:false }));
-    const insertAt = Math.min(slot-1, list.length);
-    list.splice(insertAt, 0, { src: target.file, isTarget:true, targetId: target.id });
+    // separate videos that have audio questions from those that don't
+    const withAudio    = cfg.targetVideos.filter(v => cfg.targetAudioQuestions && cfg.targetAudioQuestions[v.id]);
+    const withoutAudio = cfg.targetVideos.filter(v => !cfg.targetAudioQuestions || !cfg.targetAudioQuestions[v.id]);
 
-    state.feedList = list;
-    state.targetMeta = { id: target.id, slot: insertAt+1 };
+    function shuffle(arr){ const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+    // pick `targetCount` study-target videos (prefer those with audio questions)
+    const shuffledWithAudio    = shuffle(withAudio);
+    const shuffledWithoutAudio = shuffle(withoutAudio);
+    const studyTargets = [
+      ...shuffledWithAudio.slice(0, targetCount),
+      ...shuffledWithoutAudio.slice(0, Math.max(0, targetCount - shuffledWithAudio.length)),
+    ].slice(0, targetCount);
+
+    const studyIds = new Set(studyTargets.map(v => v.id));
+
+    // fill the rest of the feed from non-study-target videos
+    const fillers = shuffle(cfg.targetVideos.filter(v => !studyIds.has(v.id))).slice(0, size - targetCount);
+
+    // combine and shuffle positions
+    const combined = shuffle([...studyTargets, ...fillers]);
+
+    const list = combined.map(v => ({
+      src:      v.file,
+      isTarget: studyIds.has(v.id),
+      targetId: v.id,
+      meta:     v,
+    }));
+
+    state.feedList   = list;
+    // record the first study target for backward compat (survey sections use this)
+    state.targetMeta = { id: studyTargets[0].id, slot: list.findIndex(i => i.targetId === studyTargets[0].id) + 1 };
+    state.studyTargetIds = Array.from(studyIds);
   }
 
   function saveResponse(){
@@ -256,9 +329,11 @@
       submittedAt: new Date().toISOString(),
       targetVideoId: state.targetMeta.id,
       targetSlot: state.targetMeta.slot,
+      allStudyTargets: state.studyTargetIds || [state.targetMeta.id],
       feedSize: state.feedList.length,
       likedVideos: Array.from(state.likedVideos),
       likedTarget: state.likedVideos.has(state.targetMeta.id),
+      participantGroup: state.screeningAnswers['wenzhounese_identity'] === '是' ? 'wenzhounese' : 'non-wenzhounese',
       screening: state.screeningAnswers,
       survey: state.surveyAnswers,
     };
@@ -315,9 +390,15 @@
           `<button class="scale-pt" data-val="${v}">${v}</button>`).join('')}</div>
         <div class="scale-labels"><span>${q.minLabel}</span><span>${q.maxLabel}</span></div>
       `;
-    } else if(q.type === 'single-choice' || q.type === 'multiple-choice'){
+    } else if(q.type === 'single-choice'){
       return `<div class="choice-row">${q.options.map(opt=>
-        `<button class="choice-btn" data-val="${escAttr(opt)}">${opt}</button>`).join('')}</div>`;
+        `<button class="choice-btn single-choice-btn" data-val="${escAttr(opt)}">${opt}</button>`).join('')}</div>`;
+    } else if(q.type === 'multiple-choice'){
+      return `
+        <p style="font-size:12px;color:var(--ink-dim);margin:0 0 10px">可多选</p>
+        <div class="choice-row">${q.options.map(opt=>
+          `<button class="choice-btn multi-choice-btn" data-val="${escAttr(opt)}">${opt}</button>`).join('')}</div>
+      `;
     } else if(q.type === 'video-picker'){
       return `<div class="video-pick-grid">${state.feedList.map((item,i)=>
         `<button class="video-pick-btn" data-val="${i}">视频 ${i+1}</button>`).join('')}</div>`;
@@ -366,12 +447,21 @@
         document.getElementById('next-btn').disabled = inp.value.trim() === '';
       };
     } else if(q.type === 'text'){
-      // always enabled, no wiring needed
-    } else {
-      // all button-choice types
-      document.querySelectorAll('.scale-pt, .video-pick-btn, .choice-btn').forEach(btn=>{
+      // always enabled
+    } else if(q.type === 'multiple-choice'){
+      // true multi-select — each button toggles independently
+      document.querySelectorAll('.multi-choice-btn').forEach(btn=>{
         btn.onclick = () => {
-          document.querySelectorAll('.scale-pt, .video-pick-btn, .choice-btn').forEach(b=>b.classList.remove('selected'));
+          btn.classList.toggle('selected');
+          const anySelected = document.querySelectorAll('.multi-choice-btn.selected').length > 0;
+          document.getElementById('next-btn').disabled = !anySelected;
+        };
+      });
+    } else {
+      // single-select types: scale, single-choice, video-picker, audio-multiple-choice
+      document.querySelectorAll('.scale-pt, .video-pick-btn, .single-choice-btn, .choice-btn:not(.multi-choice-btn)').forEach(btn=>{
+        btn.onclick = () => {
+          document.querySelectorAll('.scale-pt, .video-pick-btn, .single-choice-btn, .choice-btn:not(.multi-choice-btn)').forEach(b=>b.classList.remove('selected'));
           btn.classList.add('selected');
           selected = btn.dataset.val;
           document.getElementById('next-btn').disabled = false;
@@ -382,6 +472,10 @@
     return function getValue(){
       if(q.type === 'text')   return document.getElementById('q-input').value.trim();
       if(q.type === 'number') return document.getElementById('q-input').value.trim();
+      if(q.type === 'multiple-choice'){
+        const sel = Array.from(document.querySelectorAll('.multi-choice-btn.selected')).map(b=>b.dataset.val);
+        return sel.length > 0 ? sel : null;
+      }
       return selected;
     };
   }
@@ -433,59 +527,34 @@
 
   // Video metadata keyed by filename (without path or extension).
   // Sourced from wenzhounese_video_log__1_.xlsx — place that file next to index.html.
-  const VIDEO_META = {
-    'target_a':  { handle:'tangtang9708',        caption:'多杯，免费啦 #温州阿唐 #温州 #多比 #哈利波特 #多比配音',                                                                                   likes:13837,   comments:986,    shares:25342   },
-    'target_b':  { handle:'温州珠宝定制大只雯',     caption:'温州话十级教学！日常高频句，学会就能说#温州话 #温州方言 #温州本地 #方言教学 #温州生活',                                                       likes:3095,    comments:274,    shares:1255    },
-    'target_c':  { handle:'1991123145A0G',        caption:'#温州话脱口秀 教科书级别的《地道温州话应用》，学会这三句温州话可以毕业了。#猛果喜剧 #温州话 #猛果龙剑 #脱口秀互动',                          likes:29101,   comments:1771,   shares:33535   },
-    'target_d':  { handle:'JiuY_22',              caption:'温州话版方言教学#温州话 #温州话散讲 #温州话教学 #温州话方言',                                                                                likes:4511,    comments:433,    shares:1529    },
-    'target_e':  { handle:'1991123145A0G',        caption:'成为合格的温州女婿，除了用AI暗推温州话，也可以关掉转向灯#猛果喜剧 #猛果 #温州话脱口秀 #脱口秀互动',                                          likes:1566,    comments:52,     shares:1746    },
-    'target_f':  { handle:'温州珠宝定制大只雯',     caption:'温州珠宝老板娘教你温州话常用语，听懂的都是本地人～#温州话 #温州话教学 #温州本地人 #温州同城 #温州珠宝店',                                    likes:2692,    comments:310,    shares:589     },
-    'target_g':  { handle:'陈思建',               caption:'温州话版 一定要看完学会！ #不灭的帅哥行为指南',                                                                                              likes:840599,  comments:69499,  shares:9695    },
-    'target_h':  { handle:'tangtang9708',         caption:'就说我这个花狗蛋演的好不好吧！ #温州  #我在浙江过大年',                                                                                      likes:230217,  comments:22866,  shares:31308   },
-    'target_j':  { handle:'71294863021',          caption:'又抽象了鱼 #温州 #温州话 #小鱼跑跑',                                                                                                       likes:197295,  comments:5344,   shares:37721   },
-    'target_k':  { handle:'xiaoyingyule',         caption:'#温州话究竟有多难懂，嗯，掌握一门外语确实很重要',                                                                                           likes:107680,  comments:9110,   shares:12123   },
-    'target_l':  { handle:'小婷',                 caption:'寝室方言大挑战——温州版2.0版本#寝室合拍 #校园生活 #浙江方言',                                                                               likes:76663,   comments:16842,  shares:86068   },
-    'target_m':  { handle:'20890010096',          caption:'哈哈哈哈哈 老薛讲温州话笑死我了#薛之谦温州 @薛之谦',                                                                                        likes:98554,   comments:10939,  shares:65331   },
-    'target_n':  { handle:'69719352269',          caption:'温州话 vs 日语，你觉得几分像？ #创作灵感 #教学 #温州话 #浙江dou知道 #内容过于真实',                                                         likes:64357,   comments:7754,   shares:104555  },
-    'target_o':  { handle:'古典小勇',              caption:'说着玩的才没有针对谁哦',                                                                                                                   likes:70189,   comments:8544,   shares:118646  },
-    'target_p':  { handle:'barbinili',            caption:'我妈跟我说话我都要愣三分钟',                                                                                                               likes:192316,  comments:15392,  shares:21482   },
-    'target_q':  { handle:'37330435140',          caption:'#撒西不理哒呐 #方言 #温州话 《不敢带你回温州》',                                                                                           likes:54662,   comments:6175,   shares:54346   },
-    'target_r':  { handle:'pbq1211',              caption:'温州人的口头禅 是不是一听就很亲切#养老院 #温州话',                                                                                          likes:60690,   comments:4569,   shares:71043   },
-    'target_s':  { handle:'WUKONGCUO88',          caption:'家人们 听我这口音 你觉得我是温州哪里的？#vlog日常 #内容过于真实#温州话 @DOU+小助手',                                                       likes:63930,   comments:10272,  shares:4494    },
-    'target_t':  { handle:'tangtang9708',         caption:'出了温州，真的就没有了 #温州',                                                                                                              likes:107311,  comments:18647,  shares:24775   },
-    'target_u':  { handle:'54950080303',          caption:'听说讲温州话会变身？  #浙江方言 #温州方言 #日常 #变身',                                                                                    likes:36166,   comments:7205,   shares:44478   },
-    'target_v':  { handle:'xubingsong0577',       caption:'多管闲事的结果 #温州话配音 #温州话 #温州方言 #炳松配音 #温州',                                                                             likes:6896,    comments:535,    shares:10160   },
-    'target_w':  { handle:'82524043801',          caption:'日本人去温州#日本人#温州 #温州话',                                                                                                          likes:108556,  comments:7791,   shares:54484   },
-    'target_x':  { handle:'W1586962H5088Z',       caption:'#温州方言 大集合 你能听懂几个地方的方言',                                                                                                  likes:38132,   comments:25395,  shares:56587   },
-    'target_y':  { handle:'娄艺潇',               caption:'温州话有点难学，但是美食真的好好吃呀！ #寻找中国最美城市 #遇见城市 #心动打卡指南',                                                          likes:28742,   comments:2748,   shares:11546   },
-    'target_z':  { handle:'tangtang9708',         caption:'想想觉得挺可惜的……#温州 #温州阿唐',                                                                                                       likes:23112,   comments:2800,   shares:3338    },
-    'target_aa': { handle:'LY6666520',            caption:'#温州话 #温州永嘉  大家伙的这几天可以开始吵架了，到13号再吵就太明显了@DOU+小助手 @抖音小助手',                                              likes:596517,  comments:23742,  shares:17997   },
-    'filler1':   { handle:'Xmtd001',              caption:'《关于同事互助这件事》 #内容过于真实 #办公室 #一定要看到最后',                                                                              likes:5897890, comments:119303, shares:5823976 },
-    'filler2':   { handle:'lijiaoling',           caption:'告别是经常的，步履是放达的。谨以这条视频献给我深爱的湖南大学。#湖南大学 #毕业季 #毕业',                                                    likes:1559877, comments:17311,  shares:224060  },
-    'filler3':   { handle:'33405186415',          caption:'第一集：师父该入万魂幡了 #原创动画 #二次元 #ai #ai动画',                                                                                   likes:218869,  comments:2113,   shares:13240   },
-    'filler4':   { handle:'海棠HaiTang',           caption:'介绍一下我跟海棠 #万物可爱计划',                                                                                                          likes:1417639, comments:25877,  shares:229096  },
-    'filler5':   { handle:'PolyJiali',            caption:'双层巴士的第一排，晒到蜕皮的震撼 #巴塔哥尼亚 #菲兹罗伊 #patagonia #去想去的地方',                                                         likes:106290,  comments:914,    shares:26867   },
-  };
+  // Metadata is now embedded directly in each targetVideos entry in config.js.
+  // metaFor reads it from the feed item's .meta field set during buildFeed.
+  function metaFor(item){
+    const m = item.meta || {};
+    return {
+      handle:   m.handle   || (item.src||'').split('/').pop().replace(/\.[^.]+$/,''),
+      caption:  m.caption  || '',
+      likes:    m.likes    || 0,
+      comments: m.comments || 0,
+      shares:   m.shares   || 0,
+    };
+  }
+
   function fmtN(n){
     if(n >= 1000000) return (n/1000000).toFixed(1).replace(/\.0$/,'') + 'M';
     if(n >= 10000)   return (n/10000).toFixed(1).replace(/\.0$/,'') + 'w';
     if(n >= 1000)    return (n/1000).toFixed(1).replace(/\.0$/,'') + 'K';
     return String(n);
   }
-  // Build a normalized lookup so filenames like "Target A.mp4", "target-a.mp4",
-  // "TargetA.mp4" all resolve to the right metadata entry.
-  const _META_INDEX = {};
-  Object.keys(VIDEO_META).forEach(k => {
-    _META_INDEX[k.toLowerCase().replace(/[\s\-]+/g, '_')] = VIDEO_META[k];
-  });
 
-  function metaFor(src){
-    const stem = src.split('/').pop().replace(/\.[^.]+$/, '')
-                    .toLowerCase().replace(/[\s\-]+/g, '_');
-    if(!_META_INDEX[stem]){
-      console.warn(`[metaFor] no metadata for stem: "${stem}" (src: "${src}")`);
+  // Pick n random comments from the pool without repeats
+  function pickComments(n){
+    const pool = [...(CONFIG.commentsPool || [])];
+    for(let i=pool.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [pool[i],pool[j]]=[pool[j],pool[i]];
     }
-    return _META_INDEX[stem] || { handle: stem, caption: '', likes:0, comments:0, shares:0 };
+    return pool.slice(0, Math.min(n, pool.length));
   }
 
   function renderFeed(){
@@ -497,8 +566,9 @@
         </div>
         <div class="feed-scroller" id="scroller">
           ${list.map((item,i)=>{
-            const m = metaFor(item.src);
+            const m = metaFor(item);
             const initial = (m.handle.replace(/[^a-zA-Z\u4e00-\u9fff]/g,'')||'?')[0].toUpperCase();
+            const coms = pickComments(CONFIG.commentsPerVideo || 3);
             return `
             <div class="feed-item" data-i="${i}">
               <div class="backdrop" id="backdrop-${i}"></div>
@@ -508,14 +578,14 @@
                 <div class="feed-avatar">${initial}</div>
                 <div class="feed-actions">
                   <div class="feed-action">
-                    <div class="feed-action-icon" id="like-btn-${i}" data-stem="${item.src.split('/').pop().replace(/\.[^.]+$/,'').toLowerCase().replace(/[\s\-]+/g,'_')}">&#10084;</div>
+                    <div class="feed-action-icon" id="like-btn-${i}" data-stem="${item.targetId||i}">&#10084;</div>
                     <div class="feed-action-count" id="like-count-${i}">${fmtN(m.likes)}</div>
                   </div>
-                  <div class="feed-action" style="pointer-events:none">
+                  <div class="feed-action" id="comment-btn-${i}" style="cursor:pointer">
                     <div class="feed-action-icon">&#128172;</div>
                     <div class="feed-action-count">${fmtN(m.comments)}</div>
                   </div>
-                  <div class="feed-action" style="pointer-events:none">
+                  <div class="feed-action" id="share-btn-${i}" style="cursor:pointer">
                     <div class="feed-action-icon">&#10148;</div>
                     <div class="feed-action-count">${fmtN(m.shares)}</div>
                   </div>
@@ -523,14 +593,24 @@
               </div>
 
               <div class="feed-meta">
-                <div class="feed-handle">
-                  <span class="feed-handle-at">@${m.handle}</span>
-                </div>
+                <div class="feed-handle"><span class="feed-handle-at">@${m.handle}</span></div>
                 <div class="feed-caption">${m.caption}</div>
-                <div class="feed-music">
-                  <span class="feed-music-note">&#9835;</span>
-                  原声 - ${m.handle}
-                </div>
+                <div class="feed-music"><span class="feed-music-note">&#9835;</span> 原声 - ${m.handle}</div>
+              </div>
+
+              <div class="comments-drawer" id="comments-${i}">
+                <div class="comments-drawer-handle"></div>
+                <div class="comments-drawer-title">评论 ${fmtN(m.comments)}</div>
+                ${coms.map(c=>{
+                  const av = c.replace(/[^a-zA-Z\u4e00-\u9fff]/g,'')[0]||'用';
+                  return `<div class="comment-row">
+                    <div class="comment-avatar">${av}</div>
+                    <div class="comment-body">
+                      <div class="comment-handle">用户${Math.floor(Math.random()*9000+1000)}</div>
+                      <div class="comment-text">${c}</div>
+                    </div>
+                  </div>`;
+                }).join('')}
               </div>
 
               <div class="sound-icon" id="sound-icon-${i}">&#128263;</div>
@@ -542,6 +622,12 @@
             <div class="sound-overlay-icon">&#128266;</div>
             <div>点击任意位置开启声音</div>
           </div>
+        </div>
+        <div class="share-toast" id="share-toast">🔗 链接已复制！</div>
+        <button class="feed-back-btn" id="feed-back-btn">◀</button>
+        <div class="volume-bar">
+          <span class="volume-icon">🔊</span>
+          <input type="range" class="volume-slider" id="volume-slider" min="0" max="150" value="100">
         </div>
         <button class="feed-continue" id="continue-btn">进入问卷 ›</button>
       </div>
@@ -630,16 +716,16 @@
       });
     });
 
-    // Like button — toggle liked state, update color + count, save to state.likedVideos
+    // Like button — toggle liked state
     items.forEach((it, i) => {
       const likeBtn   = document.getElementById('like-btn-' + i);
       const likeCount = document.getElementById('like-count-' + i);
       if(!likeBtn) return;
-      const stem = likeBtn.dataset.stem;
-      const baseLikes = metaFor(list[i].src).likes;
+      const stem = list[i].targetId || String(i);
+      const baseLikes = metaFor(list[i]).likes;
 
       likeBtn.addEventListener('click', (e) => {
-        e.stopPropagation(); // don't let click bubble up to the mute handler
+        e.stopPropagation();
         const isLiked = state.likedVideos.has(stem);
         if(isLiked){
           state.likedVideos.delete(stem);
@@ -649,11 +735,80 @@
         } else {
           state.likedVideos.add(stem);
           likeBtn.style.color = '#ff3b5c';
-          likeBtn.classList.remove('liked'); // reset first so re-tap re-triggers animation
-          void likeBtn.offsetWidth;          // force reflow
+          likeBtn.classList.remove('liked');
+          void likeBtn.offsetWidth;
           likeBtn.classList.add('liked');
           likeCount.textContent = fmtN(baseLikes + 1);
         }
+      });
+    });
+
+    // Comments button — toggle drawer open/closed
+    const shareToast = document.getElementById('share-toast');
+    items.forEach((it, i) => {
+      const commentBtn = document.getElementById('comment-btn-' + i);
+      const drawer     = document.getElementById('comments-' + i);
+      if(!commentBtn || !drawer) return;
+      commentBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isOpen = drawer.classList.contains('open');
+        // close all other drawers first
+        document.querySelectorAll('.comments-drawer').forEach(d => d.classList.remove('open'));
+        if(!isOpen) drawer.classList.add('open');
+      });
+      // tapping the video body closes the drawer
+      it.addEventListener('click', () => { drawer.classList.remove('open'); });
+    });
+
+    // Volume slider — controls all videos 0–150%
+    const volSlider = document.getElementById('volume-slider');
+    volSlider.addEventListener('input', () => {
+      const vol = Math.min(1.5, volSlider.value / 100);
+      items.forEach(it => {
+        const v = it.querySelector('video');
+        // browsers cap volume at 1.0 natively; for >100% we'd need WebAudio — cap at 1.0
+        v.volume = Math.min(1.0, vol);
+      });
+    });
+    volSlider.addEventListener('click', e => e.stopPropagation());
+
+    // Back button — scroll to previous video
+    const backBtn = document.getElementById('feed-back-btn');
+    backBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if(currentIndex > 0){
+        items[currentIndex - 1].scrollIntoView({ behavior:'smooth' });
+      }
+    });
+    // show back button only when not on first video
+    const origObserverCb = (entries) => {
+      entries.forEach(entry => {
+        if(entry.isIntersecting && entry.intersectionRatio > 0.6){
+          backBtn.classList.toggle('show', currentIndex > 0);
+        }
+      });
+    };
+    // update back btn whenever currentIndex changes (piggyback on existing observer)
+    const backBtnInterval = setInterval(() => {
+      backBtn.classList.toggle('show', currentIndex > 0);
+    }, 300);
+    let toastTimer = null;
+    items.forEach((it, i) => {
+      const shareBtn = document.getElementById('share-btn-' + i);
+      if(!shareBtn) return;
+      shareBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const url = CONFIG.shareUrl || window.location.href;
+        navigator.clipboard.writeText(url).catch(() => {
+          // fallback for browsers without clipboard API
+          const ta = document.createElement('textarea');
+          ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          document.execCommand('copy'); document.body.removeChild(ta);
+        });
+        shareToast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => shareToast.classList.remove('show'), 2200);
       });
     });
 
@@ -664,6 +819,7 @@
     function goToSurvey(){
       if(advanced) return;
       advanced = true;
+      clearInterval(backBtnInterval);
       state.screen = 'survey';
       state.surveySection = 0;
       state.surveyQIndex = 0;
@@ -689,12 +845,16 @@
 
   // ---- survey ----
   function surveySections(){
-    const targetId = state.targetMeta.id;
-    const audioQs = (CONFIG.targetAudioQuestions && CONFIG.targetAudioQuestions[targetId]) || [];
+    const targetIds  = state.studyTargetIds || [state.targetMeta.id];
+    const audioQs    = targetIds.flatMap(id => (CONFIG.targetAudioQuestions && CONFIG.targetAudioQuestions[id]) || []);
+    const isWenzhou  = state.screeningAnswers['wenzhounese_identity'] === '是';
+    const deepDiveQs = isWenzhou ? (CONFIG.wenzhouneseQuestions || []) : (CONFIG.nonWenzhouneseQuestions || []);
+    const deepTitle  = isWenzhou ? '关于您与温州话的关系' : '关于您对温州话的印象';
     return [
-      { key:'general', title:'关于这组视频', questions: CONFIG.generalQuestions },
-      { key:'target', title:'关于其中一个视频', questions: [...CONFIG.targetQuestions, ...audioQs] },
-      { key:'background', title:'关于您自己', questions: CONFIG.backgroundQuestions },
+      { key:'general',   title:'关于这组视频',    questions: CONFIG.generalQuestions },
+      { key:'target',    title:'关于其中的视频',   questions: [...CONFIG.targetQuestions, ...audioQs] },
+      { key:'deepdive',  title: deepTitle,         questions: deepDiveQs },
+      { key:'background',title:'关于您自己',       questions: CONFIG.backgroundQuestions },
     ];
   }
 
@@ -761,7 +921,8 @@
         </a>
         <p class="lead" style="margin-top:24px; font-size:13px; color:var(--ink-dim);">
           文件名：${state.downloadFilename}<br>
-          下载后请不要修改文件内容，直接发送给研究人员即可。
+          下载后请将文件发送至：<a href="mailto:supersmarteason0416@outlook.com" style="color:var(--accent)">supersmarteason0416@outlook.com</a><br>
+          或通过微信直接发送给研究人员。请勿修改文件内容，直接发送即可。
         </p>
       </div>
     `);
