@@ -283,16 +283,6 @@
 <div id="app"></div>
 
 <script>
-// ============================================================
-// FEISHU CREDENTIALS — fill these in after completing setup.
-// See the setup guide for where to find each value.
-// ============================================================
-const FEISHU_APP_ID     = 'cli_aad6ad14e0b8dbdb';       // e.g. 'cli_a7b3c2d1e0f4...'
-const FEISHU_APP_SECRET = '7wnMyKzahWpLMJPtb0ykRetM8G6su2i3';   // e.g. 'abc123xyz...'
-const FEISHU_BASE_ID    = 'KBtebfRn7aUD4OsqSGlcS66mnBb';      // e.g. 'BascXXXXXXXXXXXX'
-const FEISHU_TABLE_ID   = 'tbld2nZ15e0KFggM';     // e.g. 'tblXXXXXXXXXXXX'
-// ============================================================
-
 (function(){
 
   // ---------------- state ----------------
@@ -303,15 +293,14 @@ const FEISHU_TABLE_ID   = 'tbld2nZ15e0KFggM';     // e.g. 'tblXXXXXXXXXXXX'
     screeningIndex: 0,
     feedList: [],              // ordered list of {src, isTarget, targetId}
     feedIndex: 0,
-    targetMeta: null,
+    targetMeta: null,          // {id, slot}
     watchedAll: false,
-    likedVideos: new Set(),
+    likedVideos: new Set(),    // stems of videos the participant liked
     surveyAnswers: {},
     surveySection: 0,
     surveyQIndex: 0,
     downloadUrl: null,
     downloadFilename: null,
-    submitStatus: 'idle',   // 'idle' | 'submitting' | 'ok' | 'error'
   };
 
   const app = document.getElementById('app');
@@ -325,80 +314,66 @@ const FEISHU_TABLE_ID   = 'tbld2nZ15e0KFggM';     // e.g. 'tblXXXXXXXXXXXX'
     const cfg = CONFIG;
     const targetCount = Math.max(1, cfg.targetVideoCount || 1);
     const size        = Math.max(targetCount, cfg.feedSize || 5);
+
+    // separate videos that have audio questions from those that don't
     const withAudio    = cfg.targetVideos.filter(v => cfg.targetAudioQuestions && cfg.targetAudioQuestions[v.id]);
     const withoutAudio = cfg.targetVideos.filter(v => !cfg.targetAudioQuestions || !cfg.targetAudioQuestions[v.id]);
+
     function shuffle(arr){ const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+    // pick `targetCount` study-target videos (prefer those with audio questions)
     const shuffledWithAudio    = shuffle(withAudio);
     const shuffledWithoutAudio = shuffle(withoutAudio);
     const studyTargets = [
       ...shuffledWithAudio.slice(0, targetCount),
       ...shuffledWithoutAudio.slice(0, Math.max(0, targetCount - shuffledWithAudio.length)),
     ].slice(0, targetCount);
+
     const studyIds = new Set(studyTargets.map(v => v.id));
-    const fillers  = shuffle(cfg.targetVideos.filter(v => !studyIds.has(v.id))).slice(0, size - targetCount);
+
+    // fill the rest of the feed from non-study-target videos
+    const fillers = shuffle(cfg.targetVideos.filter(v => !studyIds.has(v.id))).slice(0, size - targetCount);
+
+    // combine and shuffle positions
     const combined = shuffle([...studyTargets, ...fillers]);
+
     const list = combined.map(v => ({
-      src: v.file, isTarget: studyIds.has(v.id), targetId: v.id, meta: v,
+      src:      v.file,
+      isTarget: studyIds.has(v.id),
+      targetId: v.id,
+      meta:     v,
     }));
-    state.feedList       = list;
-    state.targetMeta     = { id: studyTargets[0].id, slot: list.findIndex(i => i.targetId === studyTargets[0].id) + 1 };
+
+    state.feedList   = list;
+    // record the first study target for backward compat (survey sections use this)
+    state.targetMeta = { id: studyTargets[0].id, slot: list.findIndex(i => i.targetId === studyTargets[0].id) + 1 };
     state.studyTargetIds = Array.from(studyIds);
   }
 
-  async function saveResponse(){
+  function saveResponse(){
     const payload = {
-      participantId:    state.participantId,
-      submittedAt:      new Date().toISOString(),
-      targetVideoId:    state.targetMeta.id,
-      targetSlot:       String(state.targetMeta.slot),
-      allStudyTargets:  (state.studyTargetIds || [state.targetMeta.id]).join(', '),
-      feedSize:         String(state.feedList.length),
-      likedVideos:      Array.from(state.likedVideos).join(', '),
-      likedTarget:      state.likedVideos.has(state.targetMeta.id) ? '是' : '否',
-      participantGroup: state.screeningAnswers['wenzhounese_identity'] === '是' ? '温州人' : '非温州人',
-      screening:        JSON.stringify(state.screeningAnswers),
-      survey:           JSON.stringify(state.surveyAnswers),
+      participantId: state.participantId,
+      submittedAt: new Date().toISOString(),
+      targetVideoId: state.targetMeta.id,
+      targetSlot: state.targetMeta.slot,
+      allStudyTargets: state.studyTargetIds || [state.targetMeta.id],
+      feedSize: state.feedList.length,
+      likedVideos: Array.from(state.likedVideos),
+      likedTarget: state.likedVideos.has(state.targetMeta.id),
+      participantGroup: state.screeningAnswers['wenzhounese_identity'] === '是' ? 'wenzhounese' : 'non-wenzhounese',
+      screening: state.screeningAnswers,
+      survey: state.surveyAnswers,
     };
 
-    // always prepare fallback local download
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
-    state.downloadUrl      = URL.createObjectURL(blob);
-    state.downloadFilename = `response_${state.participantId}.json`;
+    const json     = JSON.stringify(payload, null, 2);
+    const blob     = new Blob([json], { type: 'application/json' });
+    const url      = URL.createObjectURL(blob);
+    const filename = `response_${state.participantId}.json`;
 
-    // if credentials not filled in, fall straight to error (shows fallback download)
-    if(FEISHU_APP_ID === 'YOUR_APP_ID'){
-      state.submitStatus = 'error';
-      return;
-    }
-
-    try{
-      // 1. get tenant access token
-      const tokenRes  = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ app_id: FEISHU_APP_ID, app_secret: FEISHU_APP_SECRET }),
-      });
-      const tokenData = await tokenRes.json();
-      if(!tokenData.tenant_access_token) throw new Error('Token error: ' + JSON.stringify(tokenData));
-      const token = tokenData.tenant_access_token;
-
-      // 2. insert record — field names must exactly match your Bitable column names
-      const recordRes  = await fetch(
-        `https://open.feishu.cn/open-apis/bitable/v1/apps/${FEISHU_BASE_ID}/tables/${FEISHU_TABLE_ID}/records`,
-        {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json', 'Authorization':`Bearer ${token}` },
-          body: JSON.stringify({ fields: payload }),
-        }
-      );
-      const recordData = await recordRes.json();
-      if(recordData.code !== 0) throw new Error('Record error: ' + JSON.stringify(recordData));
-
-      state.submitStatus = 'ok';
-    } catch(err){
-      console.error('[Feishu]', err);
-      state.submitStatus = 'error';
-    }
+    // store on state so the done screen can re-trigger the download
+    state.downloadUrl      = url;
+    state.downloadFilename = filename;
+    return { url, filename };
   }
 
   // ---------------- render ----------------
@@ -1024,45 +999,23 @@ const FEISHU_TABLE_ID   = 'tbld2nZ15e0KFggM';     // e.g. 'tblXXXXXXXXXXXX'
       }
       // finished — save and show done screen
       state.screen = 'done';
-      state.submitStatus = 'submitting';
-      render();
-      await saveResponse();
+      saveResponse();
       render();
     };
   }
 
   function renderDone(){
-    if(state.submitStatus === 'submitting'){
-      screenWrap(`
-        <div class="done-screen">
-          <div class="spinner"></div>
-          <p class="lead" style="margin-top:20px;">正在提交您的回答…</p>
-        </div>
-      `);
-      return;
-    }
-    if(state.submitStatus === 'ok'){
-      screenWrap(`
-        <div class="done-screen">
-          <div style="font-size:48px;margin-bottom:16px;">✅</div>
-          <h1>感谢您的参与！</h1>
-          <p class="lead">您的回答已成功提交，现在可以关闭此页面。</p>
-        </div>
-      `);
-      return;
-    }
-    // error state — Feishu failed, show fallback download
     screenWrap(`
       <div class="done-screen">
-        <div style="font-size:40px;margin-bottom:12px;">⚠️</div>
-        <h1>提交遇到问题</h1>
-        <p class="lead">自动提交失败，请下载您的回答文件并将其发送给研究人员。</p>
+        <h1>感谢您的参与！</h1>
+        <p class="lead">您的回答已生成为一个文件。请点击下方按钮下载，然后将文件通过微信或邮件发送给研究人员。</p>
         <a class="btn" id="download-btn" href="${state.downloadUrl}" download="${state.downloadFilename}">
           ⬇ 下载我的回答
         </a>
         <p class="lead" style="margin-top:24px; font-size:13px; color:var(--ink-dim);">
+          文件名：${state.downloadFilename}<br>
           下载后请将文件发送至：<a href="mailto:supersmarteason0416@outlook.com" style="color:var(--accent)">supersmarteason0416@outlook.com</a><br>
-          或通过微信直接发送给研究人员。请勿修改文件内容。
+          或通过微信直接发送给研究人员。请勿修改文件内容，直接发送即可。
         </p>
       </div>
     `);
