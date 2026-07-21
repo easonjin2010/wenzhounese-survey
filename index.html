@@ -283,6 +283,14 @@
 <div id="app"></div>
 
 <script>
+// ============================================================
+// CLOUDFLARE WORKER URL — paste your worker URL here.
+// It looks like: https://wenzhou-survey-proxy.yourname.workers.dev
+// The worker forwards requests to Feishu and handles CORS.
+// Never put your Feishu webhook URL directly here.
+// ============================================================
+const WORKER_URL = 'super-dawn-3782.wss0127.workers.dev';
+
 (function(){
 
   // ---------------- state ----------------
@@ -293,14 +301,16 @@
     screeningIndex: 0,
     feedList: [],              // ordered list of {src, isTarget, targetId}
     feedIndex: 0,
-    targetMeta: null,          // {id, slot}
+    targetMeta: null,
     watchedAll: false,
-    likedVideos: new Set(),    // stems of videos the participant liked
+    likedVideos: new Set(),
     surveyAnswers: {},
     surveySection: 0,
     surveyQIndex: 0,
     downloadUrl: null,
     downloadFilename: null,
+    submitStatus: 'idle',   // 'idle' | 'submitting' | 'ok' | 'error'
+    submitError:  null,
   };
 
   const app = document.getElementById('app');
@@ -314,66 +324,74 @@
     const cfg = CONFIG;
     const targetCount = Math.max(1, cfg.targetVideoCount || 1);
     const size        = Math.max(targetCount, cfg.feedSize || 5);
-
-    // separate videos that have audio questions from those that don't
     const withAudio    = cfg.targetVideos.filter(v => cfg.targetAudioQuestions && cfg.targetAudioQuestions[v.id]);
     const withoutAudio = cfg.targetVideos.filter(v => !cfg.targetAudioQuestions || !cfg.targetAudioQuestions[v.id]);
-
     function shuffle(arr){ const a=[...arr]; for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]; } return a; }
-
-    // pick `targetCount` study-target videos (prefer those with audio questions)
     const shuffledWithAudio    = shuffle(withAudio);
     const shuffledWithoutAudio = shuffle(withoutAudio);
     const studyTargets = [
       ...shuffledWithAudio.slice(0, targetCount),
       ...shuffledWithoutAudio.slice(0, Math.max(0, targetCount - shuffledWithAudio.length)),
     ].slice(0, targetCount);
-
     const studyIds = new Set(studyTargets.map(v => v.id));
-
-    // fill the rest of the feed from non-study-target videos
-    const fillers = shuffle(cfg.targetVideos.filter(v => !studyIds.has(v.id))).slice(0, size - targetCount);
-
-    // combine and shuffle positions
+    const fillers  = shuffle(cfg.targetVideos.filter(v => !studyIds.has(v.id))).slice(0, size - targetCount);
     const combined = shuffle([...studyTargets, ...fillers]);
-
     const list = combined.map(v => ({
-      src:      v.file,
-      isTarget: studyIds.has(v.id),
-      targetId: v.id,
-      meta:     v,
+      src: v.file, isTarget: studyIds.has(v.id), targetId: v.id, meta: v,
     }));
-
-    state.feedList   = list;
-    // record the first study target for backward compat (survey sections use this)
-    state.targetMeta = { id: studyTargets[0].id, slot: list.findIndex(i => i.targetId === studyTargets[0].id) + 1 };
+    state.feedList       = list;
+    state.targetMeta     = { id: studyTargets[0].id, slot: list.findIndex(i => i.targetId === studyTargets[0].id) + 1 };
     state.studyTargetIds = Array.from(studyIds);
   }
 
-  function saveResponse(){
+  async function saveResponse(){
     const payload = {
-      participantId: state.participantId,
-      submittedAt: new Date().toISOString(),
-      targetVideoId: state.targetMeta.id,
-      targetSlot: state.targetMeta.slot,
-      allStudyTargets: state.studyTargetIds || [state.targetMeta.id],
-      feedSize: state.feedList.length,
-      likedVideos: Array.from(state.likedVideos),
-      likedTarget: state.likedVideos.has(state.targetMeta.id),
-      participantGroup: state.screeningAnswers['wenzhounese_identity'] === '是' ? 'wenzhounese' : 'non-wenzhounese',
-      screening: state.screeningAnswers,
-      survey: state.surveyAnswers,
+      participantId:    state.participantId,
+      submittedAt:      new Date().toISOString(),
+      targetVideoId:    state.targetMeta.id,
+      targetSlot:       String(state.targetMeta.slot),
+      allStudyTargets:  (state.studyTargetIds || [state.targetMeta.id]).join(', '),
+      feedSize:         String(state.feedList.length),
+      likedVideos:      Array.from(state.likedVideos).join(', '),
+      likedTarget:      state.likedVideos.has(state.targetMeta.id) ? '是' : '否',
+      participantGroup: state.screeningAnswers['wenzhounese_identity'] === '是' ? '温州人' : '非温州人',
+      screening:        state.screeningAnswers,
+      survey:           state.surveyAnswers,
     };
 
-    const json     = JSON.stringify(payload, null, 2);
-    const blob     = new Blob([json], { type: 'application/json' });
-    const url      = URL.createObjectURL(blob);
-    const filename = `response_${state.participantId}.json`;
+    // always prepare fallback local download in case submission fails
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+    state.downloadUrl      = URL.createObjectURL(blob);
+    state.downloadFilename = `response_${state.participantId}.json`;
 
-    // store on state so the done screen can re-trigger the download
-    state.downloadUrl      = url;
-    state.downloadFilename = filename;
-    return { url, filename };
+    if(WORKER_URL === 'YOUR_WORKER_URL'){
+      console.warn('Worker URL not set — falling back to download.');
+      state.submitStatus = 'error';
+      return;
+    }
+
+    try{
+      const res = await fetch(WORKER_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      });
+
+      // safe text→JSON parse so a non-JSON response doesn't throw before we can log it
+      const text = await res.text();
+      console.log('[Worker response]', res.status, text);
+
+      let data = {};
+      try { data = JSON.parse(text); } catch { throw new Error('Non-JSON response: ' + text); }
+
+      if(!data.ok) throw new Error('Worker error: ' + JSON.stringify(data));
+
+      state.submitStatus = 'ok';
+    } catch(err){
+      console.error('[Submit error]', err);
+      state.submitError = err.message;
+      state.submitStatus = 'error';
+    }
   }
 
   // ---------------- render ----------------
@@ -969,7 +987,7 @@
 
     const getValue = wireQuestionInput(q);
 
-    document.getElementById('next-btn').onclick = () => {
+    document.getElementById('next-btn').onclick = async () => {
       const val = getValue();
       if(val === null || val === ''){
         // text is optional, everything else requires an answer
@@ -999,23 +1017,46 @@
       }
       // finished — save and show done screen
       state.screen = 'done';
-      saveResponse();
+      state.submitStatus = 'submitting';
+      render();
+      await saveResponse();
       render();
     };
   }
 
   function renderDone(){
+    if(state.submitStatus === 'submitting'){
+      screenWrap(`
+        <div class="done-screen">
+          <div class="spinner"></div>
+          <p class="lead" style="margin-top:20px;">正在提交您的回答…</p>
+        </div>
+      `);
+      return;
+    }
+    if(state.submitStatus === 'ok'){
+      screenWrap(`
+        <div class="done-screen">
+          <div style="font-size:48px;margin-bottom:16px;">✅</div>
+          <h1>感谢您的参与！</h1>
+          <p class="lead">您的回答已成功提交，现在可以关闭此页面。</p>
+        </div>
+      `);
+      return;
+    }
+    // error state — Feishu failed, show fallback download
     screenWrap(`
       <div class="done-screen">
-        <h1>感谢您的参与！</h1>
-        <p class="lead">您的回答已生成为一个文件。请点击下方按钮下载，然后将文件通过微信或邮件发送给研究人员。</p>
+        <div style="font-size:40px;margin-bottom:12px;">⚠️</div>
+        <h1>提交遇到问题</h1>
+        <p class="lead">自动提交失败，请下载您的回答文件并将其发送给研究人员。</p>
+        ${state.submitError ? `<p style="font-size:11px;color:var(--ink-dim);word-break:break-all;margin:0 0 8px">${state.submitError}</p>` : ''}
         <a class="btn" id="download-btn" href="${state.downloadUrl}" download="${state.downloadFilename}">
           ⬇ 下载我的回答
         </a>
         <p class="lead" style="margin-top:24px; font-size:13px; color:var(--ink-dim);">
-          文件名：${state.downloadFilename}<br>
           下载后请将文件发送至：<a href="mailto:supersmarteason0416@outlook.com" style="color:var(--accent)">supersmarteason0416@outlook.com</a><br>
-          或通过微信直接发送给研究人员。请勿修改文件内容，直接发送即可。
+          或通过微信直接发送给研究人员。请勿修改文件内容。
         </p>
       </div>
     `);
