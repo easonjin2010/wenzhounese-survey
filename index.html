@@ -293,9 +293,9 @@
 //   SERVICE_ID   → Email Services → your service → Service ID
 //   TEMPLATE_ID  → Email Templates → your template → Template ID
 // ============================================================
-const EMAILJS_PUBLIC_KEY  = '6y4JYhChTyL5P_GKY';
-const EMAILJS_SERVICE_ID  = 'service_nys42nc';
-const EMAILJS_TEMPLATE_ID = 'template_fjv0cys';
+const EMAILJS_PUBLIC_KEY  = 'YOUR_PUBLIC_KEY';
+const EMAILJS_SERVICE_ID  = 'YOUR_SERVICE_ID';
+const EMAILJS_TEMPLATE_ID = 'YOUR_TEMPLATE_ID';
 
 (function(){
 
@@ -351,18 +351,65 @@ const EMAILJS_TEMPLATE_ID = 'template_fjv0cys';
   }
 
   async function saveResponse(){
+    // helper: resolve a feed slot index (0-based string) to a readable label
+    function slotLabel(idxStr){
+      const i = parseInt(idxStr, 10);
+      if(isNaN(i) || !state.feedList[i]) return `槽位${idxStr}（未知）`;
+      const item = state.feedList[i];
+      const m    = metaFor(item);
+      return `视频${i+1} @${m.handle} [${item.targetId}]`;
+    }
+
+    // build a readable version of every survey answer
+    const readableSurvey = {};
+    for(const [k, v] of Object.entries(state.surveyAnswers)){
+      if(k === 'most_interesting' || k === 'most_shareable'){
+        readableSurvey[k] = slotLabel(v);
+      } else if(Array.isArray(v)){
+        readableSurvey[k] = v.join(' | ');
+      } else if(typeof v === 'object' && v !== null){
+        // audio-multiple-choice: {answer, correct}
+        readableSurvey[k] = `${v.answer} (${v.correct ? '✓正确' : '✗错误'})`;
+      } else {
+        readableSurvey[k] = v;
+      }
+    }
+
+    // build a readable feed summary
+    const feedSummary = state.feedList.map((item, i) => {
+      const m         = metaFor(item);
+      const isStudy   = (state.studyTargetIds || [state.targetMeta.id]).includes(item.targetId);
+      const isLiked   = state.likedVideos.has(item.targetId);
+      return `视频${i+1}: @${m.handle} [${item.targetId}]${isStudy ? ' ★研究目标' : ''}${isLiked ? ' ❤️已点赞' : ''}`;
+    });
+
+    // study targets with their positions
+    const studyTargetDetails = (state.studyTargetIds || [state.targetMeta.id]).map(id => {
+      const slot = state.feedList.findIndex(item => item.targetId === id);
+      const item = state.feedList[slot];
+      const m    = item ? metaFor(item) : {};
+      return `[${id}] @${m.handle || '?'} 出现在第${slot+1}位`;
+    });
+
     const payload = {
       participantId:    state.participantId,
       submittedAt:      new Date().toISOString(),
-      targetVideoId:    state.targetMeta.id,
-      targetSlot:       String(state.targetMeta.slot),
-      allStudyTargets:  (state.studyTargetIds || [state.targetMeta.id]).join(', '),
-      feedSize:         String(state.feedList.length),
-      likedVideos:      Array.from(state.likedVideos).join(', '),
-      likedTarget:      state.likedVideos.has(state.targetMeta.id) ? '是' : '否',
       participantGroup: state.screeningAnswers['wenzhounese_identity'] === '是' ? '温州人' : '非温州人',
-      screening:        state.screeningAnswers,
-      survey:           state.surveyAnswers,
+
+      // feed info
+      feedSize:         state.feedList.length,
+      feedOrder:        feedSummary.join('\n'),
+      studyTargets:     studyTargetDetails.join('\n'),
+      likedVideos:      state.feedList
+                          .filter(item => state.likedVideos.has(item.targetId))
+                          .map(item => `@${metaFor(item).handle} [${item.targetId}]`)
+                          .join(', ') || '无',
+
+      // screening answers (already readable — they're text/scale values)
+      screening: state.screeningAnswers,
+
+      // survey answers — slot numbers resolved to video labels
+      survey: readableSurvey,
     };
 
     // always prepare fallback local download in case email fails
@@ -384,17 +431,15 @@ const EMAILJS_TEMPLATE_ID = 'template_fjv0cys';
         EMAILJS_SERVICE_ID,
         EMAILJS_TEMPLATE_ID,
         {
-          // these variable names must match what you put in your EmailJS template
           participant_id:    payload.participantId,
           submitted_at:      payload.submittedAt,
           participant_group: payload.participantGroup,
-          target_video_id:   payload.targetVideoId,
-          target_slot:       payload.targetSlot,
-          liked_target:      payload.likedTarget,
+          feed_order:        payload.feedOrder,
+          study_targets:     payload.studyTargets,
           liked_videos:      payload.likedVideos,
-          screening_json:    JSON.stringify(payload.screening,  null, 2),
-          survey_json:       JSON.stringify(payload.survey,     null, 2),
-          full_json:         JSON.stringify(payload,            null, 2),
+          screening_json:    JSON.stringify(payload.screening, null, 2),
+          survey_json:       JSON.stringify(payload.survey,    null, 2),
+          full_json:         JSON.stringify(payload,           null, 2),
         }
       );
 
