@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>视频观看问卷</title>
 <script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   :root{
     --bg: #0b0b0c;
@@ -284,12 +285,17 @@
 
 <script>
 // ============================================================
-// CLOUDFLARE WORKER URL — paste your worker URL here.
-// It looks like: https://wenzhou-survey-proxy.yourname.workers.dev
-// The worker forwards requests to Feishu and handles CORS.
-// Never put your Feishu webhook URL directly here.
+// EMAILJS CREDENTIALS — fill these in after completing setup.
+// See EMAILJS_SETUP.md for step-by-step instructions.
+//
+// All three values come from your EmailJS dashboard at emailjs.com:
+//   PUBLIC_KEY   → Account → API Keys → Public Key
+//   SERVICE_ID   → Email Services → your service → Service ID
+//   TEMPLATE_ID  → Email Templates → your template → Template ID
 // ============================================================
-const WORKER_URL = 'super-dawn-3782.wss0127.workers.dev';
+const EMAILJS_PUBLIC_KEY  = '6y4JYhChTyL5P_GKY';
+const EMAILJS_SERVICE_ID  = 'service_nys42nc';
+const EMAILJS_TEMPLATE_ID = 'template_fjv0cys';
 
 (function(){
 
@@ -359,38 +365,46 @@ const WORKER_URL = 'super-dawn-3782.wss0127.workers.dev';
       survey:           state.surveyAnswers,
     };
 
-    // always prepare fallback local download in case submission fails
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+    // always prepare fallback local download in case email fails
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     state.downloadUrl      = URL.createObjectURL(blob);
     state.downloadFilename = `response_${state.participantId}.json`;
 
-    if(WORKER_URL === 'YOUR_WORKER_URL'){
-      console.warn('Worker URL not set — falling back to download.');
+    if(EMAILJS_PUBLIC_KEY === 'YOUR_PUBLIC_KEY'){
+      console.warn('EmailJS credentials not set — showing fallback download.');
       state.submitStatus = 'error';
+      state.submitError  = '邮件凭证未配置，请联系研究人员。';
       return;
     }
 
     try{
-      const res = await fetch(WORKER_URL, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(payload),
-      });
+      emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
 
-      // safe text→JSON parse so a non-JSON response doesn't throw before we can log it
-      const text = await res.text();
-      console.log('[Worker response]', res.status, text);
+      const result = await emailjs.send(
+        EMAILJS_SERVICE_ID,
+        EMAILJS_TEMPLATE_ID,
+        {
+          // these variable names must match what you put in your EmailJS template
+          participant_id:    payload.participantId,
+          submitted_at:      payload.submittedAt,
+          participant_group: payload.participantGroup,
+          target_video_id:   payload.targetVideoId,
+          target_slot:       payload.targetSlot,
+          liked_target:      payload.likedTarget,
+          liked_videos:      payload.likedVideos,
+          screening_json:    JSON.stringify(payload.screening,  null, 2),
+          survey_json:       JSON.stringify(payload.survey,     null, 2),
+          full_json:         JSON.stringify(payload,            null, 2),
+        }
+      );
 
-      let data = {};
-      try { data = JSON.parse(text); } catch { throw new Error('Non-JSON response: ' + text); }
-
-      if(!data.ok) throw new Error('Worker error: ' + JSON.stringify(data));
-
+      console.log('[EmailJS] success:', result.status, result.text);
       state.submitStatus = 'ok';
+
     } catch(err){
-      console.error('[Submit error]', err);
-      state.submitError = err.message;
+      console.error('[EmailJS] error:', err);
       state.submitStatus = 'error';
+      state.submitError  = typeof err === 'object' && err.text ? err.text : String(err);
     }
   }
 
